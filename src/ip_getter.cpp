@@ -15,9 +15,11 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ip_getter {
@@ -29,7 +31,6 @@ static bool is_link_local(const uint8_t* addr16) {
 }
 
 static bool is_loopback(const uint8_t* addr16) {
-    // ::1
     for (int i = 0; i < 15; ++i) if (addr16[i] != 0) return false;
     return addr16[15] == 1;
 }
@@ -38,14 +39,46 @@ static bool is_ula(const uint8_t* addr16) {
     return (addr16[0] == 0xfc || addr16[0] == 0xfd);
 }
 
-static bool is_global_unicast(const uint8_t* addr16) {
-    return !is_link_local(addr16) && !is_loopback(addr16) && !is_ula(addr16);
-}
-
 static std::string format_ipv6(const uint8_t* addr16) {
     char buf[INET6_ADDRSTRLEN];
     inet_ntop(AF_INET6, addr16, buf, sizeof(buf));
     return buf;
+}
+
+/// Populate IPv6Info fields (matching Go version's PopulateInfo)
+static void populate_info(IPv6Info* info) {
+    if (info->ip.empty()) return;
+
+    // Convert IP to bytes for checking
+    uint8_t addr[16];
+    if (inet_pton(AF_INET6, info->ip.c_str(), addr) != 1) return;
+
+    info->is_unique_local = is_ula(addr);
+
+    if (is_link_local(addr)) {
+        info->scope = "Link Local";
+    } else if (info->is_unique_local) {
+        info->scope = "Unique Local (ULA)";
+    } else {
+        info->scope = "Global Unicast";
+    }
+
+    info->is_deprecated = (info->preferred_lft <= 0 && info->valid_lft > 0);
+
+    if (info->valid_lft == 0) {
+        info->address_state = "Expired";
+    } else if (info->is_deprecated) {
+        info->address_state = "Deprecated";
+    } else if (info->preferred_lft < info->valid_lft) {
+        info->address_state = "Preferred/Dynamic";
+    } else {
+        info->address_state = "Preferred/Static";
+    }
+
+    info->is_candidate = (info->scope == "Global Unicast" && 
+                          !info->is_deprecated && 
+                          !info->is_unique_local && 
+                          info->valid_lft > 0);
 }
 
 // ─── Netlink IPv6 getter ──────────────────────────────────────────────────────
@@ -132,8 +165,7 @@ std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
             info.preferred_lft = (preferred_lft == 0xFFFFFFFF) ? (long)1e12 : (long)preferred_lft;
             info.valid_lft     = (valid_lft     == 0xFFFFFFFF) ? (long)1e12 : (long)valid_lft;
             info.is_deprecated = deprecated;
-            info.is_global     = is_global_unicast(addr);
-            info.is_candidate  = info.is_global && !info.is_deprecated;
+            populate_info(&info);
 
             if (info.is_candidate) result.push_back(info);
         }
@@ -162,40 +194,67 @@ static std::string trim(const std::string& s) {
 }
 
 static std::string fetch_ip_from_url(const std::string& url, std::string& err) {
-    CURL* curl = curl_easy_init();
-    if (!curl) { err = "curl_easy_init failed"; return ""; }
+    constexpr int MAX_RETRIES = 2;
 
-    std::string body;
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V6); // force IPv6
+    for (int attempt = 0; attempt <= MAX_RETRIES; ++attempt) {
+        CURL* curl = curl_easy_init();
+        if (!curl) { err = "curl_easy_init failed"; return ""; }
 
-    CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(curl);
+        std::string body;
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V6); // force IPv6
 
-    if (res != CURLE_OK) { err = curl_easy_strerror(res); return ""; }
-    if (http_code != 200) { err = "HTTP " + std::to_string(http_code); return ""; }
+        CURLcode res = curl_easy_perform(curl);
+        long http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        curl_easy_cleanup(curl);
 
-    // Take first line and trim
-    std::string line = trim(body.substr(0, body.find('\n')));
-    if (line.empty()) { err = "Empty response"; return ""; }
+        if (res != CURLE_OK) {
+            err = curl_easy_strerror(res);
+            if (attempt < MAX_RETRIES) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                continue;
+            }
+            return "";
+        }
 
-    // Validate as IPv6
-    uint8_t addr[16];
-    if (inet_pton(AF_INET6, line.c_str(), addr) != 1) {
-        err = "Not a valid IPv6: " + line;
-        return "";
+        if (http_code != 200) {
+            err = "HTTP " + std::to_string(http_code);
+            if (attempt < MAX_RETRIES) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                continue;
+            }
+            return "";
+        }
+
+        // Take first line and trim
+        std::string line = trim(body.substr(0, body.find('\n')));
+        if (line.empty()) {
+            err = "Empty response";
+            if (attempt < MAX_RETRIES) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                continue;
+            }
+            return "";
+        }
+
+        // Validate as IPv6
+        uint8_t addr[16];
+        if (inet_pton(AF_INET6, line.c_str(), addr) != 1) {
+            err = "Not a valid IPv6: " + line;
+            return "";
+        }
+        if (is_link_local(addr) || is_loopback(addr) || is_ula(addr)) {
+            err = "Private/local address not suitable: " + line;
+            return "";
+        }
+        return line;
     }
-    if (is_link_local(addr) || is_loopback(addr) || is_ula(addr)) {
-        err = "Private/local address not suitable: " + line;
-        return "";
-    }
-    return line;
+    return "";
 }
 
 } // anonymous namespace
@@ -214,9 +273,7 @@ std::vector<IPv6Info> get_from_apis(const std::vector<std::string>& urls,
             info.ip            = ip;
             info.preferred_lft = (long)1e12; // treat as permanent
             info.valid_lft     = (long)1e12;
-            info.is_deprecated = false;
-            info.is_global     = true;
-            info.is_candidate  = true;
+            populate_info(&info);
             return {info};
         }
         logger::error("API %s failed: %s", url.c_str(), err.c_str());

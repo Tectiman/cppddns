@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -39,6 +40,12 @@ struct RecordConfig {
     bool                             use_proxy = false;
     std::optional<CloudflareRecord>  cloudflare;
     std::optional<AliyunRecord>      aliyun;
+
+    // Raw values before environment variable expansion (for security validation)
+    std::string _raw_cloudflare_api_token;
+    std::string _raw_cloudflare_zone_id;
+    std::string _raw_aliyun_access_key_id;
+    std::string _raw_aliyun_access_key_secret;
 };
 
 struct Config {
@@ -67,5 +74,14 @@ std::string get_record_proxy(const Config& cfg, const RecordConfig& record);
 
 /// Effective TTL for a record
 int get_record_ttl(const RecordConfig& record);
+
+/// Read ZoneID cache (map of zone -> zone_id)
+std::map<std::string, std::string> read_zone_id_cache(const std::string& path);
+
+/// Update ZoneID cache for a specific zone
+bool update_zone_id_cache(const std::string& path, const std::string& zone, const std::string& zone_id);
+
+/// Get ZoneID cache file path
+std::string get_zone_id_cache_path(const std::string& config_abs_path);
 
 } // namespace config

@@ -47,19 +47,51 @@ cmake --build build -j$(nproc)
 
 ## 配置文件
 
-与 Go 版本 **完全兼容**，可直接复用：
+### 安全性要求
+
+**重要**：出于安全考虑，cppddns **禁止在配置文件中明文存储密钥信息**。
+所有敏感信息（API Token、AccessKey 等）必须使用环境变量引用。
+
+❌ 错误示例（明文密钥，会被拒绝执行）：
+```json
+{
+    "cloudflare": {
+        "api_token": "your_actual_token_here"
+    }
+}
+```
+
+✅ 正确示例（使用环境变量）：
+```json
+{
+    "cloudflare": {
+        "api_token": "${CLOUDFLARE_API_TOKEN}",
+        "zone_id": "${CLOUDFLARE_ZONE_ID:-}"
+    }
+}
+```
+
+运行前设置环境变量：
+```bash
+export CLOUDFLARE_API_TOKEN="your_token_here"
+export ALIYUN_ACCESS_KEY_ID="LTAI1234567890"
+export ALIYUN_ACCESS_KEY_SECRET="your_secret_here"
+./build/cppddns run -f config.json
+```
+
+### 配置示例
 
 ```json
 {
     "general": {
         "get_ip": {
-            "interface": "enp6s18",
+            "interface": "eth0",
             "urls": [
                 "https://ipv6.icanhazip.com",
                 "https://6.ipw.cn"
             ]
         },
-        "work_dir": "",
+        "work_dir": "/opt/cppddns",
         "log_output": "shell",
         "proxy": ""
     },
@@ -68,12 +100,12 @@ cmake --build build -j$(nproc)
             "provider": "cloudflare",
             "zone": "example.com",
             "record": "dev",
-            "ttl": 180,
+            "ttl": 300,
             "proxied": false,
             "use_proxy": false,
             "cloudflare": {
-                "api_token": "YOUR_CLOUDFLARE_API_TOKEN",
-                "zone_id": ""
+                "api_token": "${CLOUDFLARE_API_TOKEN}",
+                "zone_id": "${CLOUDFLARE_ZONE_ID:-}"
             }
         },
         {
@@ -81,9 +113,10 @@ cmake --build build -j$(nproc)
             "zone": "example.cn",
             "record": "www",
             "ttl": 600,
+            "use_proxy": false,
             "aliyun": {
-                "access_key_id": "YOUR_ACCESS_KEY_ID",
-                "access_key_secret": "YOUR_ACCESS_KEY_SECRET"
+                "access_key_id": "${ALIYUN_ACCESS_KEY_ID}",
+                "access_key_secret": "${ALIYUN_ACCESS_KEY_SECRET}"
             }
         }
     ]

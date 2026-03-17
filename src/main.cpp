@@ -57,9 +57,7 @@ struct UpdateResult {
 static UpdateResult update_single_record(const config::Config&       cfg,
                                           const config::RecordConfig& rec,
                                           const std::string&          current_ip,
-                                          const std::string&          cache_file,
-                                          bool                        ignore_cache,
-                                          std::mutex&                 cache_mu) {
+                                          const std::string&          zone_id_cache_file) {
     UpdateResult result;
     result.record_name = rec.record + "." + rec.zone;
 
@@ -88,7 +86,17 @@ static UpdateResult update_single_record(const config::Config&       cfg,
         if (rec.cloudflare->ttl > 0) ttl = rec.cloudflare->ttl;
         bool proxied = rec.proxied || rec.cloudflare->proxied;
 
-        // Auto-fetch zone_id if not set
+        // Auto-fetch zone_id if not set (try cache first)
+        if (zone_id.empty()) {
+            // Try to read from ZoneID cache
+            auto cached_zone_ids = config::read_zone_id_cache(zone_id_cache_file);
+            auto it = cached_zone_ids.find(rec.zone);
+            if (it != cached_zone_ids.end() && !it->second.empty()) {
+                zone_id = it->second;
+                logger::debug("Zone ID loaded from cache for %s: %s", rec.zone.c_str(), zone_id.c_str());
+            }
+        }
+
         if (zone_id.empty()) {
             logger::info("Zone ID not configured, fetching for zone: %s", rec.zone.c_str());
             std::string err;
@@ -99,6 +107,11 @@ static UpdateResult update_single_record(const config::Config&       cfg,
                 return result;
             }
             logger::info("Zone ID fetched: %s", zone_id.c_str());
+
+            // Save to cache
+            if (!config::update_zone_id_cache(zone_id_cache_file, rec.zone, zone_id)) {
+                logger::warning("Warning: failed to save Zone ID cache");
+            }
         }
 
         bool ok = provider.upsert_record_with_zone_id(
@@ -143,20 +156,12 @@ static UpdateResult update_single_record(const config::Config&       cfg,
     logger::success("Record %s updated successfully", result.record_name.c_str());
     result.success = true;
 
-    // Update IP cache (thread-safe)
-    {
-        std::lock_guard<std::mutex> lk(cache_mu);
-        if (!cache::write_last_ip(cache_file, current_ip)) {
-            logger::warning("Warning: failed to write cache file");
-        }
-    }
-
     return result;
 }
 
 // ─── Run command ──────────────────────────────────────────────────────────────
 
-static int run_cmd(const std::string& config_path, bool ignore_cache) {
+static int run_cmd(const std::string& config_path, bool ignore_cache, int timeout_sec) {
     // Register signal handlers
     std::signal(SIGINT,  signal_handler);
     std::signal(SIGTERM, signal_handler);
@@ -227,18 +232,32 @@ static int run_cmd(const std::string& config_path, bool ignore_cache) {
     }
 
     // ── Update all records in parallel ────────────────────────────────────────
-    std::mutex               cache_mu;
+    std::string              zone_id_cache_file = config::get_zone_id_cache_path(abs_config.string());
     std::vector<UpdateResult> results(cfg.records.size());
     std::vector<std::thread>  threads;
     threads.reserve(cfg.records.size());
 
     for (size_t i = 0; i < cfg.records.size(); ++i) {
         threads.emplace_back([&, i]() {
-            results[i] = update_single_record(cfg, cfg.records[i], current_ip,
-                                               cache_file, ignore_cache, cache_mu);
+            if (g_shutdown.load()) return;
+            results[i] = update_single_record(cfg, cfg.records[i], current_ip, zone_id_cache_file);
         });
     }
-    for (auto& t : threads) t.join();
+
+    // Wait for threads with timeout
+    auto start = std::chrono::steady_clock::now();
+    for (auto& t : threads) {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+        if (elapsed >= timeout_sec) {
+            logger::warning("Timeout reached (%d seconds), forcing shutdown", timeout_sec);
+            g_shutdown.store(true);
+            break;
+        }
+        if (t.joinable()) {
+            t.join();
+        }
+    }
 
     // ── Summarize ─────────────────────────────────────────────────────────────
     int success_count = 0, fail_count = 0;
@@ -247,10 +266,17 @@ static int run_cmd(const std::string& config_path, bool ignore_cache) {
     }
 
     logger::info("Update completed: %d succeeded, %d failed", success_count, fail_count);
+
+    // Update cache only if IP changed and at least one succeeded
+    bool any_success = (success_count > 0);
+    if (any_success && last_ip != current_ip) {
+        if (!cache::write_last_ip(cache_file, current_ip)) {
+            logger::warning("Warning: failed to write cache file");
+        }
+    }
+
     return fail_count > 0 ? 1 : 0;
 }
-
-// ─── main ─────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
     argparse::ArgumentParser program("cppddns", APP_VERSION);
@@ -266,6 +292,9 @@ int main(int argc, char* argv[]) {
         .help("忽略缓存 IP，强制更新")
         .default_value(false)
         .implicit_value(true);
+    run_cmd_parser.add_argument("-t", "--timeout")
+        .help("超时时间（秒），默认 300 秒")
+        .default_value(300);
 
     // ── Sub-command: version ──────────────────────────────────────────────────
     argparse::ArgumentParser version_cmd("version");
@@ -295,7 +324,8 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         bool ignore_cache = run_cmd_parser.get<bool>("--ignore-cache");
-        return run_cmd(config_path, ignore_cache);
+        int timeout = run_cmd_parser.get<int>("--timeout");
+        return run_cmd(config_path, ignore_cache, timeout);
     }
 
     std::cerr << program;

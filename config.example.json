@@ -1,14 +1,14 @@
 {
     "general": {
         "get_ip": {
-            "interface": "enp6s18",
+            "interface": "eth0",
             "urls": [
                 "https://ipv6.icanhazip.com",
                 "https://6.ipw.cn",
                 "https://v6.ipv6-test.com/api/myip.php"
             ]
         },
-        "work_dir": "",
+        "work_dir": "/opt/cppddns",
         "log_output": "shell",
         "proxy": ""
     },
@@ -17,12 +17,12 @@
             "provider": "cloudflare",
             "zone": "example.com",
             "record": "dev",
-            "ttl": 180,
+            "ttl": 300,
             "proxied": false,
             "use_proxy": false,
             "cloudflare": {
-                "api_token": "YOUR_CLOUDFLARE_API_TOKEN",
-                "zone_id": ""
+                "api_token": "${CLOUDFLARE_API_TOKEN}",
+                "zone_id": "${CLOUDFLARE_ZONE_ID:-}"
             }
         },
         {
@@ -32,8 +32,8 @@
             "ttl": 600,
             "use_proxy": false,
             "aliyun": {
-                "access_key_id": "YOUR_ACCESS_KEY_ID",
-                "access_key_secret": "YOUR_ACCESS_KEY_SECRET"
+                "access_key_id": "${ALIYUN_ACCESS_KEY_ID}",
+                "access_key_secret": "${ALIYUN_ACCESS_KEY_SECRET}"
             }
         }
     ]

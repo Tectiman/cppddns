@@ -4,13 +4,17 @@
 
 namespace ip_getter {
 
+/// IPv6Info contains information about an IPv6 address
+/// (matching Go version's ifaddr.IPv6Info)
 struct IPv6Info {
     std::string ip;
-    long        preferred_lft = 0; ///< seconds; large value = "permanent"
+    std::string scope;           ///< "Link Local", "Unique Local (ULA)", "Global Unicast"
+    std::string address_state;   ///< "Expired", "Deprecated", "Preferred/Dynamic", "Preferred/Static"
+    long        preferred_lft = 0; ///< seconds
     long        valid_lft     = 0;
     bool        is_deprecated = false;
-    bool        is_global     = false;
-    bool        is_candidate  = false;
+    bool        is_unique_local = false;
+    bool        is_candidate  = false; ///< Whether it is a DDNS candidate
 };
 
 /// Get IPv6 addresses from interface using Linux netlink.
