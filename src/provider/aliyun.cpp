@@ -119,15 +119,20 @@ auto AliyunProvider::sign_and_request(
     // Sign
     params["Signature"] = generate_signature(params);
 
-    // Build URL
+    // Build URL using ranges to join parameters
     auto build_pair = [this](const auto& kv) {
         return kv.first + '=' + url_encode(kv.second);
     };
 
+    // Collect transformed pairs and join with '&'
+    std::vector<std::string> encoded_pairs;
+    std::ranges::transform(params, std::back_inserter(encoded_pairs), build_pair);
+    
+    // Join with '&' delimiter
     std::string qs;
-    for (const auto& pair_str : params | std::views::transform(build_pair)) {
-        if (!qs.empty()) qs += '&';
-        qs += pair_str;
+    for (size_t i = 0; i < encoded_pairs.size(); ++i) {
+        if (i > 0) qs += '&';
+        qs += encoded_pairs[i];
     }
     std::string url = "https://alidns.aliyuncs.com/?" + qs;
 
