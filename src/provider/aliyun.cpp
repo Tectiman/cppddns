@@ -7,10 +7,12 @@
 #include <openssl/sha.h>
 
 #include <algorithm>
+#include <format>
 #include <chrono>
-#include <ctime>
+#include <format>
 #include <iomanip>
 #include <map>
+#include <ranges>
 #include <sstream>
 #include <thread>
 
@@ -77,12 +79,14 @@ std::string AliyunProvider::url_encode(const std::string& s) {
 
 std::string AliyunProvider::generate_signature(const std::map<std::string, std::string>& params) {
     // Sorted params (std::map is already sorted)
+    auto encode_pair = [this](const auto& kv) {
+        return url_encode(kv.first) + '=' + url_encode(kv.second);
+    };
+
     std::string canonicalized;
-    bool first = true;
-    for (const auto& kv : params) {
-        if (!first) canonicalized += '&';
-        canonicalized += url_encode(kv.first) + '=' + url_encode(kv.second);
-        first = false;
+    for (const auto& pair_str : params | std::views::transform(encode_pair)) {
+        if (!canonicalized.empty()) canonicalized += '&';
+        canonicalized += pair_str;
     }
 
     std::string string_to_sign = "GET&" + url_encode("/") + "&" + url_encode(canonicalized);
@@ -92,8 +96,8 @@ std::string AliyunProvider::generate_signature(const std::map<std::string, std::
 
 // ─── HTTP request (signed) ────────────────────────────────────────────────────
 
-AliyunProvider::HttpResponse AliyunProvider::sign_and_request(
-        std::map<std::string, std::string> params) {
+auto AliyunProvider::sign_and_request(
+        std::map<std::string, std::string> params) -> std::expected<HttpResponse, std::string> {
 
     // Common parameters
     params["AccessKeyId"]      = access_key_id_;
@@ -109,31 +113,28 @@ AliyunProvider::HttpResponse AliyunProvider::sign_and_request(
     params["SignatureNonce"] = std::to_string(ns);
 
     // Timestamp: UTC ISO 8601
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
-    struct tm tm_utc{};
-    gmtime_r(&t, &tm_utc);
-    char ts[30];
-    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
-    params["Timestamp"] = ts;
+    params["Timestamp"] = std::format("{:%Y-%m-%dT%H:%M:%SZ}",
+                                    std::chrono::time_point_cast<std::chrono::seconds>(now));
 
     // Sign
     params["Signature"] = generate_signature(params);
 
     // Build URL
+    auto build_pair = [this](const auto& kv) {
+        return kv.first + '=' + url_encode(kv.second);
+    };
+
     std::string qs;
-    bool first = true;
-    for (const auto& kv : params) {
-        if (!first) qs += '&';
-        // Use standard percent encoding for the final URL query string
-        qs += kv.first + '=' + url_encode(kv.second);
-        first = false;
+    for (const auto& pair_str : params | std::views::transform(build_pair)) {
+        if (!qs.empty()) qs += '&';
+        qs += pair_str;
     }
     std::string url = "https://alidns.aliyuncs.com/?" + qs;
 
     constexpr int MAX_RETRIES = 3;
     for (int attempt = 0; attempt <= MAX_RETRIES; ++attempt) {
         CURL* curl = curl_easy_init();
-        if (!curl) return {-1, "curl_easy_init failed"};
+        if (!curl) return std::unexpected("curl_easy_init failed");
 
         std::string body;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
@@ -151,37 +152,38 @@ AliyunProvider::HttpResponse AliyunProvider::sign_and_request(
                 std::this_thread::sleep_for(std::chrono::seconds(1 << attempt));
                 continue;
             }
-            return {-1, curl_easy_strerror(res)};
+            return std::unexpected(curl_easy_strerror(res));
         }
         if (code >= 500 && attempt < MAX_RETRIES) {
             std::this_thread::sleep_for(std::chrono::seconds(1 << attempt));
             continue;
         }
-        return {code, body};
+        return HttpResponse{code, body};
     }
-    return {-1, "max retries exceeded"};
+    return std::unexpected("max retries exceeded");
 }
 
 // ─── Get record ID ────────────────────────────────────────────────────────────
 
-std::string AliyunProvider::get_record_id(const std::string& full_domain) {
+std::expected<std::string, std::string> AliyunProvider::get_record_id(const std::string& full_domain) {
     std::map<std::string, std::string> params{
         {"Action",    "DescribeSubDomainRecords"},
         {"SubDomain", full_domain}
     };
 
     auto resp = sign_and_request(params);
-    if (resp.code < 0) {
-        logger::error("Aliyun: request failed: %s", resp.body.c_str());
-        return "";
+    if (!resp) {
+        std::string err = "Aliyun: request failed: " + resp.error();
+        logger::error("{}", err);
+        return std::unexpected(err);
     }
 
     try {
-        auto j = json::parse(resp.body);
+        auto j = json::parse(resp->body);
         if (j.contains("Code") && j["Code"].is_string() && !j["Code"].get<std::string>().empty()) {
-            logger::error("Aliyun API error: %s - %s",
-                       j.value("Code", "").c_str(), j.value("Message", "").c_str());
-            return "";
+            std::string err = "Aliyun API error: " + j.value("Code", "") + " - " + j.value("Message", "");
+            logger::error("{}", err);
+            return std::unexpected(err);
         }
         if (!j.contains("DomainRecords")) return "";
         const auto& records = j["DomainRecords"]["Record"];
@@ -194,21 +196,24 @@ std::string AliyunProvider::get_record_id(const std::string& full_domain) {
         }
         return records[0]["RecordId"].get<std::string>();
     } catch (const std::exception& e) {
-        logger::error("Aliyun: JSON parse error: %s", e.what());
-        return "";
+        std::string err = std::string("Aliyun: JSON parse error: ") + e.what();
+        logger::error("{}", err);
+        return std::unexpected(err);
     }
 }
 
 // ─── Upsert record ────────────────────────────────────────────────────────────
 
-bool AliyunProvider::upsert_record(const std::string& zone,
+std::expected<void, std::string> AliyunProvider::upsert_record(const std::string& zone,
                                     const std::string& record_name,
                                     const std::string& ip,
                                     int                ttl,
-                                    const std::map<std::string, std::string>& extra) {
+                                    const std::map<std::string, std::string>& /*extra*/) {
     std::string full_domain = (record_name == "@") ? zone : (record_name + "." + zone);
 
-    std::string record_id = get_record_id(full_domain);
+    auto record_id_res = get_record_id(full_domain);
+    if (!record_id_res) return std::unexpected(record_id_res.error());
+    std::string record_id = *record_id_res;
 
     std::map<std::string, std::string> params;
     if (record_id.empty()) {
@@ -234,22 +239,24 @@ bool AliyunProvider::upsert_record(const std::string& zone,
     if (ttl > 0) params["TTL"] = std::to_string(ttl);
 
     auto resp = sign_and_request(params);
-    if (resp.code < 0) {
-        logger::error("Aliyun: request failed: %s", resp.body.c_str());
-        return false;
+    if (!resp) {
+        std::string err = "Aliyun: request failed: " + resp.error();
+        logger::error("{}", err);
+        return std::unexpected(err);
     }
 
     try {
-        auto j = json::parse(resp.body);
+        auto j = json::parse(resp->body);
         if (j.contains("Code") && j["Code"].is_string() && !j["Code"].get<std::string>().empty()) {
-            logger::error("Aliyun API error: %s - %s",
-                       j.value("Code", "").c_str(), j.value("Message", "").c_str());
-            return false;
+            std::string err = "Aliyun API error: " + j.value("Code", "") + " - " + j.value("Message", "");
+            logger::error("{}", err);
+            return std::unexpected(err);
         }
-        return true;
+        return {};
     } catch (const std::exception& e) {
-        logger::error("Aliyun: JSON parse error: %s", e.what());
-        return false;
+        std::string err = std::string("Aliyun: JSON parse error: ") + e.what();
+        logger::error("{}", err);
+        return std::unexpected(err);
     }
 }
 

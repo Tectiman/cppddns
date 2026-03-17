@@ -2,6 +2,7 @@
 #include <format>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace logger {
 
@@ -39,27 +40,37 @@ void log_line(const char* level_str, const char* color, LogLevel level, const st
 // C++23: Using std::format for type-safe formatting
 template<typename... Args>
 void debug(std::format_string<Args...> fmt, Args&&... args) {
-    log_line("[DEBUG]", COLOR_GRAY, LogLevel::Debug, std::format(fmt, std::forward<Args>(args)...));
+    if (std::to_underlying(LogLevel::Debug) >= std::to_underlying(get_level())) {
+        log_line("[DEBUG]", COLOR_GRAY, LogLevel::Debug, std::format(fmt, std::forward<Args>(args)...));
+    }
 }
 
 template<typename... Args>
 void info(std::format_string<Args...> fmt, Args&&... args) {
-    log_line("[INFO]", COLOR_CYAN, LogLevel::Info, std::format(fmt, std::forward<Args>(args)...));
+    if (std::to_underlying(LogLevel::Info) >= std::to_underlying(get_level())) {
+        log_line("[INFO]", COLOR_CYAN, LogLevel::Info, std::format(fmt, std::forward<Args>(args)...));
+    }
 }
 
 template<typename... Args>
 void error(std::format_string<Args...> fmt, Args&&... args) {
-    log_line("[ERROR]", COLOR_RED, LogLevel::Error, std::format(fmt, std::forward<Args>(args)...));
+    if (std::to_underlying(LogLevel::Error) >= std::to_underlying(get_level())) {
+        log_line("[ERROR]", COLOR_RED, LogLevel::Error, std::format(fmt, std::forward<Args>(args)...));
+    }
 }
 
 template<typename... Args>
 void success(std::format_string<Args...> fmt, Args&&... args) {
-    log_line("[SUCCESS]", COLOR_GREEN, LogLevel::Success, std::format(fmt, std::forward<Args>(args)...));
+    if (std::to_underlying(LogLevel::Success) >= std::to_underlying(get_level())) {
+        log_line("[SUCCESS]", COLOR_GREEN, LogLevel::Success, std::format(fmt, std::forward<Args>(args)...));
+    }
 }
 
 template<typename... Args>
 void warning(std::format_string<Args...> fmt, Args&&... args) {
-    log_line("[WARNING]", COLOR_YELLOW, LogLevel::Warning, std::format(fmt, std::forward<Args>(args)...));
+    if (std::to_underlying(LogLevel::Warning) >= std::to_underlying(get_level())) {
+        log_line("[WARNING]", COLOR_YELLOW, LogLevel::Warning, std::format(fmt, std::forward<Args>(args)...));
+    }
 }
 
 void fatal(std::string_view msg);  ///< logs then exit(1)

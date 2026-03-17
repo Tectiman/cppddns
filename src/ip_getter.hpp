@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
+#include <expected>
 
 namespace ip_getter {
 
@@ -18,16 +20,14 @@ struct IPv6Info {
 };
 
 /// Get IPv6 addresses from interface using Linux netlink.
-/// Returns empty vector + sets error_out on failure.
-std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
-                                          std::string&       error_out);
+/// Returns error string on failure.
+std::expected<std::vector<IPv6Info>, std::string> get_from_interface(std::string_view iface_name);
 
 /// Query multiple HTTP APIs (tries each, returns first success).
-std::vector<IPv6Info> get_from_apis(const std::vector<std::string>& urls,
-                                     std::string&                    error_out);
+std::expected<std::vector<IPv6Info>, std::string> get_from_apis(const std::vector<std::string>& urls);
 
 /// Select the best (longest PreferredLft) global unicast candidate.
-/// Returns empty string on failure.
-std::string select_best(const std::vector<IPv6Info>& infos, std::string& error_out);
+/// Returns error string on failure.
+std::expected<std::string, std::string> select_best(const std::vector<IPv6Info>& infos);
 
 } // namespace ip_getter

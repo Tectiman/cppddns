@@ -7,13 +7,13 @@
 
 #include <argparse/argparse.hpp>
 
-#include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,10 +30,10 @@
 #endif
 
 // ─── Signal handling ──────────────────────────────────────────────────────────
-static std::atomic<bool> g_shutdown{false};
+static std::stop_source g_stop_source;
 
 static void signal_handler(int) {
-    g_shutdown.store(true);
+    g_stop_source.request_stop();
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -54,14 +54,15 @@ struct UpdateResult {
     std::string error;
 };
 
-static UpdateResult update_single_record(const config::Config&       cfg,
+static UpdateResult update_single_record(std::stop_token            stoken,
+                                          const config::Config&       cfg,
                                           const config::RecordConfig& rec,
                                           const std::string&          current_ip,
                                           const std::string&          zone_id_cache_file) {
     UpdateResult result;
     result.record_name = rec.record + "." + rec.zone;
 
-    if (g_shutdown.load()) {
+    if (stoken.stop_requested()) {
         result.error = "shutdown requested";
         return result;
     }
@@ -99,13 +100,13 @@ static UpdateResult update_single_record(const config::Config&       cfg,
 
         if (zone_id.empty()) {
             logger::info("Zone ID not configured, fetching for zone: {}", rec.zone);
-            std::string err;
-            zone_id = provider.get_zone_id(rec.zone, "", err);
-            if (zone_id.empty()) {
-                result.error = "Failed to get Zone ID: " + err;
+            auto z_res = provider.get_zone_id(rec.zone, "");
+            if (!z_res) {
+                result.error = "Failed to get Zone ID: " + z_res.error();
                 logger::error("Record {}: {}", result.record_name, result.error);
                 return result;
             }
+            zone_id = *z_res;
             logger::info("Zone ID fetched: {}", zone_id);
 
             // Save to cache
@@ -114,11 +115,11 @@ static UpdateResult update_single_record(const config::Config&       cfg,
             }
         }
 
-        bool ok = provider.upsert_record_with_zone_id(
+        auto ok = provider.upsert_record_with_zone_id(
             rec.zone, rec.record, current_ip, zone_id, ttl, proxied);
 
         if (!ok) {
-            result.error = "Cloudflare upsert failed";
+            result.error = "Cloudflare upsert failed: " + ok.error();
             logger::error("Failed to update {}", result.record_name);
             return result;
         }
@@ -140,9 +141,9 @@ static UpdateResult update_single_record(const config::Config&       cfg,
             rec.aliyun->access_key_id, rec.aliyun->access_key_secret);
 
         std::map<std::string, std::string> extra;
-        bool ok = provider.upsert_record(rec.zone, rec.record, current_ip, ttl, extra);
+        auto ok = provider.upsert_record(rec.zone, rec.record, current_ip, ttl, extra);
         if (!ok) {
-            result.error = "Aliyun upsert failed";
+            result.error = "Aliyun upsert failed: " + ok.error();
             logger::error("Failed to update {}", result.record_name);
             return result;
         }
@@ -191,30 +192,30 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
     logger::info("cppddns starting with {} record(s)", cfg.records.size());
 
     // ── Get current IPv6 ──────────────────────────────────────────────────────
-    std::vector<ip_getter::IPv6Info> infos;
-    std::string ip_err;
+    std::expected<std::vector<ip_getter::IPv6Info>, std::string> infos_res;
 
     if (!cfg.general.get_ip.interface_name.empty()) {
-        infos = ip_getter::get_from_interface(cfg.general.get_ip.interface_name, ip_err);
-        if (infos.empty()) {
+        infos_res = ip_getter::get_from_interface(cfg.general.get_ip.interface_name);
+        if (!infos_res) {
             logger::info("Interface {} failed: {}. Trying API fallback...",
-                      cfg.general.get_ip.interface_name, ip_err);
-            infos = ip_getter::get_from_apis(cfg.general.get_ip.urls, ip_err);
+                      cfg.general.get_ip.interface_name, infos_res.error());
+            infos_res = ip_getter::get_from_apis(cfg.general.get_ip.urls);
         }
     } else {
-        infos = ip_getter::get_from_apis(cfg.general.get_ip.urls, ip_err);
+        infos_res = ip_getter::get_from_apis(cfg.general.get_ip.urls);
     }
 
-    if (infos.empty()) {
-        logger::error("Failed to get current IP: {}", ip_err);
+    if (!infos_res) {
+        logger::error("Failed to get current IP: {}", infos_res.error());
         return 1;
     }
 
-    std::string current_ip = ip_getter::select_best(infos, ip_err);
-    if (current_ip.empty()) {
-        logger::error("Failed to select best IPv6: {}", ip_err);
+    auto ip_res = ip_getter::select_best(*infos_res);
+    if (!ip_res) {
+        logger::error("Failed to select best IPv6: {}", ip_res.error());
         return 1;
     }
+    std::string current_ip = *ip_res;
 
     logger::info("Current IPv6 address: {}", current_ip);
 
@@ -234,13 +235,12 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
     // ── Update all records in parallel ────────────────────────────────────────
     std::string              zone_id_cache_file = config::get_zone_id_cache_path(abs_config.string());
     std::vector<UpdateResult> results(cfg.records.size());
-    std::vector<std::thread>  threads;
+    std::vector<std::jthread> threads;
     threads.reserve(cfg.records.size());
 
     for (size_t i = 0; i < cfg.records.size(); ++i) {
-        threads.emplace_back([&, i]() {
-            if (g_shutdown.load()) return;
-            results[i] = update_single_record(cfg, cfg.records[i], current_ip, zone_id_cache_file);
+        threads.emplace_back([&, i](std::stop_token st) {
+            results[i] = update_single_record(st, cfg, cfg.records[i], current_ip, zone_id_cache_file);
         });
     }
 
@@ -251,7 +251,7 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
         if (elapsed >= timeout_sec) {
             logger::warning("Timeout reached ({} seconds), forcing shutdown", timeout_sec);
-            g_shutdown.store(true);
+            g_stop_source.request_stop();
             break;
         }
         if (t.joinable()) {

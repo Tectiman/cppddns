@@ -26,15 +26,14 @@ static size_t write_cb(char* ptr, size_t size, size_t nmemb, void* ud) {
 CloudflareProvider::CloudflareProvider(std::string api_token, std::string proxy_url)
     : api_token_(std::move(api_token)), proxy_url_(std::move(proxy_url)) {}
 
-CloudflareProvider::HttpResponse
-CloudflareProvider::cf_request(const std::string& method,
+auto CloudflareProvider::cf_request(const std::string& method,
                                 const std::string& url,
-                                const std::string& body_json) {
+                                const std::string& body_json) -> std::expected<HttpResponse, std::string> {
     constexpr int MAX_RETRIES = 3;
 
     for (int attempt = 0; attempt <= MAX_RETRIES; ++attempt) {
         CURL* curl = curl_easy_init();
-        if (!curl) return {-1, "curl_easy_init failed"};
+        if (!curl) return std::unexpected("curl_easy_init failed");
 
         std::string response_body;
 
@@ -82,7 +81,7 @@ CloudflareProvider::cf_request(const std::string& method,
                 std::this_thread::sleep_for(std::chrono::seconds(1 << attempt));
                 continue;
             }
-            return {-1, std::string("curl error: ") + curl_easy_strerror(res)};
+            return std::unexpected(std::string("curl error: ") + curl_easy_strerror(res));
         }
 
         if (http_code >= 500 && attempt < MAX_RETRIES) {
@@ -90,47 +89,45 @@ CloudflareProvider::cf_request(const std::string& method,
             continue;
         }
 
-        return {http_code, response_body};
+        return HttpResponse{http_code, response_body};
     }
-    return {-1, "max retries exceeded"};
+    return std::unexpected("max retries exceeded");
 }
 
 // ─── Get Zone ID ──────────────────────────────────────────────────────────────
 
-std::string CloudflareProvider::get_zone_id(const std::string& zone_name,
-                                             const std::string& zone_id_hint,
-                                             std::string&       error_out) {
+std::expected<std::string, std::string> CloudflareProvider::get_zone_id(const std::string& zone_name,
+                                             const std::string& zone_id_hint) {
     if (!zone_id_hint.empty()) return zone_id_hint;
 
     std::string url = "https://api.cloudflare.com/client/v4/zones?name=" + zone_name;
     auto resp = cf_request("GET", url);
-    if (resp.code != 200) {
-        error_out = "GET zones returned HTTP " + std::to_string(resp.code);
-        return "";
+    if (!resp) return std::unexpected(resp.error());
+    if (resp->code != 200) {
+        return std::unexpected("GET zones returned HTTP " + std::to_string(resp->code));
     }
 
     try {
-        auto j = json::parse(resp.body);
+        auto j = json::parse(resp->body);
         if (!j.value("success", false) || !j.contains("result") || j["result"].empty()) {
-            error_out = "Zone not found for: " + zone_name;
+            std::string err = "Zone not found for: " + zone_name;
             if (j.contains("errors") && !j["errors"].empty())
-                error_out += ". API error: " + j["errors"][0].value("message", "");
-            return "";
+                err += ". API error: " + j["errors"][0].value("message", "");
+            return std::unexpected(err);
         }
         return j["result"][0]["id"].get<std::string>();
     } catch (const std::exception& e) {
-        error_out = std::string("JSON parse error: ") + e.what();
-        return "";
+        return std::unexpected(std::string("JSON parse error: ") + e.what());
     }
 }
 
 // ─── Upsert record ────────────────────────────────────────────────────────────
 
-bool CloudflareProvider::upsert_record(const std::string& zone,
-                                        const std::string& record_name,
-                                        const std::string& ip,
-                                        int                ttl,
-                                        const std::map<std::string, std::string>& extra) {
+std::expected<void, std::string> CloudflareProvider::upsert_record(const std::string& zone,
+                                         const std::string& record_name,
+                                         const std::string& ip,
+                                         int                ttl,
+                                         const std::map<std::string, std::string>& extra) {
     bool proxied = false;
     auto it = extra.find("proxied");
     if (it != extra.end()) proxied = (it->second == "true" || it->second == "1");
@@ -141,18 +138,19 @@ bool CloudflareProvider::upsert_record(const std::string& zone,
     if (zit != extra.end()) zone_id = zit->second;
 
     if (zone_id.empty()) {
-        std::string err;
-        zone_id = get_zone_id(zone, "", err);
-        if (zone_id.empty()) {
-            logger::error("Cloudflare: failed to get zone_id for %s: %s", zone.c_str(), err.c_str());
-            return false;
+        auto z_res = get_zone_id(zone, "");
+        if (!z_res) {
+            std::string err = "Cloudflare: failed to get zone_id for " + zone + ": " + z_res.error();
+            logger::error("{}", err);
+            return std::unexpected(err);
         }
+        zone_id = *z_res;
     }
 
     return upsert_record_with_zone_id(zone, record_name, ip, zone_id, ttl, proxied);
 }
 
-bool CloudflareProvider::upsert_record_with_zone_id(const std::string& zone,
+std::expected<void, std::string> CloudflareProvider::upsert_record_with_zone_id(const std::string& zone,
                                                      const std::string& record_name,
                                                      const std::string& ip,
                                                      const std::string& zone_id,
@@ -163,9 +161,11 @@ bool CloudflareProvider::upsert_record_with_zone_id(const std::string& zone,
                            + zone_id + "/dns_records?type=AAAA&name=" + fqdn;
 
     auto search_resp = cf_request("GET", search_url);
-    if (search_resp.code != 200) {
-        logger::error("Cloudflare: search DNS record returned HTTP %ld", search_resp.code);
-        return false;
+    if (!search_resp) return std::unexpected(search_resp.error());
+    if (search_resp->code != 200) {
+        std::string err = "Cloudflare: search DNS record returned HTTP " + std::to_string(search_resp->code);
+        logger::error("{}", err);
+        return std::unexpected(err);
     }
 
     json new_record = {
@@ -177,13 +177,14 @@ bool CloudflareProvider::upsert_record_with_zone_id(const std::string& zone,
     };
 
     try {
-        auto sj = json::parse(search_resp.body);
+        auto sj = json::parse(search_resp->body);
         if (!sj.value("success", false)) {
             std::string msg;
             if (sj.contains("errors") && !sj["errors"].empty())
                 msg = sj["errors"][0].value("message", "unknown");
-            logger::error("Cloudflare: DNS search failed: %s", msg.c_str());
-            return false;
+            std::string err = "Cloudflare: DNS search failed: " + msg;
+            logger::error("{}", err);
+            return std::unexpected(err);
         }
 
         std::string method, endpoint;
@@ -195,8 +196,8 @@ bool CloudflareProvider::upsert_record_with_zone_id(const std::string& zone,
             int         existing_ttl     = existing.value("ttl", 0);
 
             if (existing_ip == ip && existing_proxied == proxied && existing_ttl == ttl) {
-                logger::info("Cloudflare: record %s already up-to-date", fqdn.c_str());
-                return true;
+                logger::info("Cloudflare: record {} already up-to-date", fqdn);
+                return {};
             }
             std::string record_id = existing["id"].get<std::string>();
             method   = "PUT";
@@ -210,20 +211,23 @@ bool CloudflareProvider::upsert_record_with_zone_id(const std::string& zone,
 
         std::string body = new_record.dump();
         auto put_resp = cf_request(method, endpoint, body);
+        if (!put_resp) return std::unexpected(put_resp.error());
 
-        auto rj = json::parse(put_resp.body);
+        auto rj = json::parse(put_resp->body);
         if (!rj.value("success", false)) {
             std::string msg;
             if (rj.contains("errors") && !rj["errors"].empty())
                 msg = rj["errors"][0].value("message", "unknown");
-            logger::error("Cloudflare: %s failed: %s", method.c_str(), msg.c_str());
-            return false;
+            std::string err = "Cloudflare: " + method + " failed: " + msg;
+            logger::error("{}", err);
+            return std::unexpected(err);
         }
-        return true;
+        return {};
 
     } catch (const std::exception& e) {
-        logger::error("Cloudflare: JSON error: %s", e.what());
-        return false;
+        std::string err = std::string("Cloudflare: JSON error: ") + e.what();
+        logger::error("{}", err);
+        return std::unexpected(err);
     }
 }
 

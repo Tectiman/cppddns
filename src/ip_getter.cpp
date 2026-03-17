@@ -20,6 +20,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -88,19 +89,16 @@ static void populate_info(IPv6Info* info) {
 
 #if defined(__linux__)
 
-std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
-                                          std::string&       error_out) {
-    unsigned int iface_idx = if_nametoindex(iface_name.c_str());
+std::expected<std::vector<IPv6Info>, std::string> get_from_interface(std::string_view iface_name) {
+    unsigned int iface_idx = if_nametoindex(iface_name.data());
     if (iface_idx == 0) {
-        error_out = "Interface not found: " + iface_name;
-        return {};
+        return std::unexpected(std::string("Interface not found: ") + std::string(iface_name));
     }
 
     // Open netlink socket
     int sock = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
     if (sock < 0) {
-        error_out = std::string("socket() failed: ") + strerror(errno);
-        return {};
+        return std::unexpected(std::string("socket() failed: ") + strerror(errno));
     }
 
     // Send RTM_GETADDR request
@@ -115,9 +113,9 @@ std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
     req.ifa.ifa_family  = AF_INET6;
 
     if (send(sock, &req, req.nlh.nlmsg_len, 0) < 0) {
-        error_out = std::string("send() failed: ") + strerror(errno);
+        std::string err = std::string("send() failed: ") + strerror(errno);
         close(sock);
-        return {};
+        return std::unexpected(err);
     }
 
     // Read response
@@ -127,15 +125,15 @@ std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
     while (true) {
         ssize_t len = recv(sock, buf, sizeof(buf), 0);
         if (len < 0) {
-            error_out = std::string("recv() failed: ") + strerror(errno);
+            std::string err = std::string("recv() failed: ") + strerror(errno);
             close(sock);
-            return {};
+            return std::unexpected(err);
         }
 
         const nlmsghdr* nlh = reinterpret_cast<const nlmsghdr*>(buf);
         for (; NLMSG_OK(nlh, (unsigned)len); nlh = NLMSG_NEXT(nlh, len)) {
             if (nlh->nlmsg_type == NLMSG_DONE)  { goto done; }
-            if (nlh->nlmsg_type == NLMSG_ERROR) { error_out = "netlink error"; close(sock); return {}; }
+            if (nlh->nlmsg_type == NLMSG_ERROR) { close(sock); return std::unexpected("netlink error"); }
             if (nlh->nlmsg_type != RTM_NEWADDR)  continue;
 
             const ifaddrmsg* ifa = reinterpret_cast<const ifaddrmsg*>(NLMSG_DATA(nlh));
@@ -177,7 +175,7 @@ std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
     }
 done:
     close(sock);
-    if (result.empty()) error_out = "No suitable IPv6 address on interface " + iface_name;
+    if (result.empty()) return std::unexpected("No suitable IPv6 address on interface " + std::string(iface_name));
     return result;
 }
 
@@ -194,10 +192,9 @@ static size_t curl_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata
 }
 
 static std::string trim(const std::string& s) {
-    size_t start = s.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return "";
-    size_t end = s.find_last_not_of(" \t\r\n");
-    return s.substr(start, end - start + 1);
+    auto is_space = [](unsigned char c) { return std::isspace(c); };
+    auto trimmed = s | std::views::drop_while(is_space) | std::views::reverse | std::views::drop_while(is_space) | std::views::reverse;
+    return std::string(trimmed.begin(), trimmed.end());
 }
 
 static std::string fetch_ip_from_url(const std::string& url, std::string& err) {
@@ -266,9 +263,8 @@ static std::string fetch_ip_from_url(const std::string& url, std::string& err) {
 
 } // anonymous namespace
 
-std::vector<IPv6Info> get_from_apis(const std::vector<std::string>& urls,
-                                     std::string&                    error_out) {
-    if (urls.empty()) { error_out = "No API URLs configured"; return {}; }
+std::expected<std::vector<IPv6Info>, std::string> get_from_apis(const std::vector<std::string>& urls) {
+    if (urls.empty()) { return std::unexpected("No API URLs configured"); }
 
     for (const auto& url : urls) {
         logger::info("Querying API: %s", url.c_str());
@@ -281,28 +277,24 @@ std::vector<IPv6Info> get_from_apis(const std::vector<std::string>& urls,
             info.preferred_lft = (long)1e12; // treat as permanent
             info.valid_lft     = (long)1e12;
             populate_info(&info);
-            return {info};
+            return std::vector<IPv6Info>{info};
         }
-        logger::error("API %s failed: %s", url.c_str(), err.c_str());
-        error_out = err;
+        logger::error("API {} failed: {}", url, err);
+        // keep last err
     }
-    return {};
+    return std::unexpected("All API requests failed");
 }
 
 // ─── Select best ─────────────────────────────────────────────────────────────
 
-std::string select_best(const std::vector<IPv6Info>& infos, std::string& error_out) {
-    const IPv6Info* best = nullptr;
-    for (const auto& info : infos) {
-        if (!info.is_candidate) continue;
-        if (!best || info.preferred_lft > best->preferred_lft) {
-            best = &info;
-        }
+std::expected<std::string, std::string> select_best(const std::vector<IPv6Info>& infos) {
+    auto candidates = infos | std::views::filter([](const IPv6Info& info) { return info.is_candidate; });
+    
+    if (candidates.empty()) {
+        return std::unexpected("No suitable global unicast IPv6 candidate found");
     }
-    if (!best) {
-        error_out = "No suitable global unicast IPv6 candidate found";
-        return "";
-    }
+
+    auto best = std::ranges::max_element(candidates, {}, &IPv6Info::preferred_lft);
     return best->ip;
 }
 

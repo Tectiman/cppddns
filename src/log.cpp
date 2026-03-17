@@ -1,8 +1,9 @@
 #include "log.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <ctime>
+#include <format>
 #include <regex>
 #include <string>
 #include <string_view>
@@ -30,16 +31,10 @@ bool check_is_terminal(FILE* f) {
 }
 
 std::string timestamp() {
-    timespec ts{};
-    clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm_info{};
-    localtime_r(&ts.tv_sec, &tm_info);
-    char buf[40];
-    snprintf(buf, sizeof(buf), "%04d/%02d/%02d %02d:%02d:%02d.%03d",
-             tm_info.tm_year + 1900, tm_info.tm_mon + 1, tm_info.tm_mday,
-             tm_info.tm_hour, tm_info.tm_min, tm_info.tm_sec,
-             static_cast<int>(ts.tv_nsec / 1'000'000L));
-    return buf;
+    auto now = std::chrono::system_clock::now();
+    return std::format("{:%Y/%m/%d %H:%M:%S}.{:03d}",
+                       std::chrono::time_point_cast<std::chrono::seconds>(now),
+                       std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
 }
 
 std::string sanitize(const std::string& msg) {
@@ -80,7 +75,6 @@ LogLevel get_level() {
 }
 
 void log_line(const char* level_str, const char* color, LogLevel level, const std::string& msg) {
-    // Check if this level should be logged
     if (std::to_underlying(level) < std::to_underlying(g_level)) {
         return;
     }
@@ -90,12 +84,13 @@ void log_line(const char* level_str, const char* color, LogLevel level, const st
     FILE* target = g_out ? g_out : stdout;
 
     if (g_is_terminal) {
-        fprintf(target, "%s %s%s%s %s\n",
-                timestamp().c_str(), color, level_str, COLOR_RESET, sanitized.c_str());
+        std::string txt = std::format("{} {}{}{} {}\n", timestamp(), color, level_str, COLOR_RESET, sanitized);
+        std::fputs(txt.c_str(), target);
     } else {
-        fprintf(target, "%s %s %s\n", timestamp().c_str(), level_str, sanitized.c_str());
+        std::string txt = std::format("{} {} {}\n", timestamp(), level_str, sanitized);
+        std::fputs(txt.c_str(), target);
     }
-    fflush(target);
+    std::fflush(target);
 }
 
 void fatal(std::string_view msg) {

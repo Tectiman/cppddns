@@ -1,4 +1,5 @@
 #pragma once
+#include <expected>
 #include <map>
 #include <string>
 
@@ -13,12 +14,12 @@ public:
 
     /// Create or update a DNS AAAA record.
     /// extra: provider-specific key-value pairs (e.g. "proxied" → "true")
-    /// Returns true on success.
-    virtual bool upsert_record(const std::string& zone,
-                               const std::string& record_name,
-                               const std::string& ip,
-                               int                ttl,
-                               const std::map<std::string, std::string>& extra) = 0;
+    /// Returns empty on success, error message on failure.
+    virtual std::expected<void, std::string> upsert_record(const std::string& zone,
+                                                           const std::string& record_name,
+                                                           const std::string& ip,
+                                                           int                ttl,
+                                                           const std::map<std::string, std::string>& extra) = 0;
 };
 
 } // namespace provider
