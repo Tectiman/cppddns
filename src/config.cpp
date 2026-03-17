@@ -103,12 +103,12 @@ static bool is_env_var_reference(const std::string& s) {
 /// Validate that sensitive values are not stored in plaintext
 static bool validate_no_plaintext_secret(const std::string& value, const std::string& field_name) {
     if (value.empty()) {
-        logger::error("Config: %s is empty", field_name.c_str());
+        logger::error("Config: {} is empty", field_name);
         return false;
     }
     if (!is_env_var_reference(value)) {
-        logger::error("Config: %s must use environment variable reference (e.g., ${VAR_NAME}), "
-                      "plaintext secrets are not allowed for security reasons", field_name.c_str());
+        logger::error("Config: {} must use environment variable reference (e.g., ${{VAR_NAME}}), "
+                      "plaintext secrets are not allowed for security reasons", field_name);
         return false;
     }
     return true;
@@ -139,32 +139,32 @@ static bool validate_config(const Config& cfg) {
     }
 
     if (!cfg.general.proxy.empty() && !validate_proxy_url(cfg.general.proxy)) {
-        logger::error("Config: invalid global proxy format '%s'", cfg.general.proxy.c_str());
+        logger::error("Config: invalid global proxy format '{}'", cfg.general.proxy);
         return false;
     }
 
     for (size_t i = 0; i < cfg.records.size(); ++i) {
         const auto& r = cfg.records[i];
         if (r.provider.empty()) {
-            logger::error("Config: record[%zu]: provider is required", i);
+            logger::error("Config: record[{}]: provider is required", i);
             return false;
         }
         if (r.zone.empty()) {
-            logger::error("Config: record[%zu]: zone is required", i);
+            logger::error("Config: record[{}]: zone is required", i);
             return false;
         }
         if (r.record.empty()) {
-            logger::error("Config: record[%zu]: record name is required", i);
+            logger::error("Config: record[{}]: record name is required", i);
             return false;
         }
         if (r.use_proxy && cfg.general.proxy.empty()) {
-            logger::error("Config: record[%zu]: use_proxy=true but no global proxy set", i);
+            logger::error("Config: record[{}]: use_proxy=true but no global proxy set", i);
             return false;
         }
 
         if (r.provider == "cloudflare") {
             if (!r.cloudflare) {
-                logger::error("Config: record[%zu]: cloudflare configuration is missing", i);
+                logger::error("Config: record[{}]: cloudflare configuration is missing", i);
                 return false;
             }
             // Validate raw value (before env expansion) for security
@@ -174,12 +174,12 @@ static bool validate_config(const Config& cfg) {
             }
             // Check if expanded value is empty (env var not set)
             if (r.cloudflare->api_token.empty()) {
-                logger::error("Config: record[%zu]: cloudflare.api_token environment variable is not set or empty", i);
+                logger::error("Config: record[{}]: cloudflare.api_token environment variable is not set or empty", i);
                 return false;
             }
         } else if (r.provider == "aliyun") {
             if (!r.aliyun) {
-                logger::error("Config: record[%zu]: aliyun configuration is missing", i);
+                logger::error("Config: record[{}]: aliyun configuration is missing", i);
                 return false;
             }
             // Validate raw values (before env expansion) for security
@@ -193,15 +193,15 @@ static bool validate_config(const Config& cfg) {
             }
             // Check if expanded values are empty (env vars not set)
             if (r.aliyun->access_key_id.empty()) {
-                logger::error("Config: record[%zu]: aliyun.access_key_id environment variable is not set or empty", i);
+                logger::error("Config: record[{}]: aliyun.access_key_id environment variable is not set or empty", i);
                 return false;
             }
             if (r.aliyun->access_key_secret.empty()) {
-                logger::error("Config: record[%zu]: aliyun.access_key_secret environment variable is not set or empty", i);
+                logger::error("Config: record[{}]: aliyun.access_key_secret environment variable is not set or empty", i);
                 return false;
             }
         } else {
-            logger::error("Config: record[%zu]: unsupported provider '%s'", i, r.provider.c_str());
+            logger::error("Config: record[{}]: unsupported provider '{}'", i, r.provider);
             return false;
         }
     }
@@ -214,13 +214,13 @@ std::optional<Config> read_config(const std::string& path) {
     std::error_code ec;
     fs::path abs_path = fs::absolute(path, ec);
     if (ec) {
-        logger::error("Failed to resolve config path '%s': %s", path.c_str(), ec.message().c_str());
+        logger::error("Failed to resolve config path '{}': {}", path, ec.message());
         return std::nullopt;
     }
 
     std::ifstream f(abs_path);
     if (!f.is_open()) {
-        logger::error("Failed to open config file: %s", abs_path.c_str());
+        logger::error("Failed to open config file: {}", abs_path.string());
         return std::nullopt;
     }
 
@@ -228,7 +228,7 @@ std::optional<Config> read_config(const std::string& path) {
     try {
         f >> root;
     } catch (const json::parse_error& e) {
-        logger::error("Failed to parse config JSON: %s", e.what());
+        logger::error("Failed to parse config JSON: {}", e.what());
         return std::nullopt;
     }
 
@@ -361,7 +361,7 @@ std::string get_cache_file_path(const std::string& config_abs_path,
         if (!ec) {
             return (fs::path(work_dir) / "cache.lastip").string();
         }
-        logger::error("Failed to create work_dir '%s': %s", work_dir.c_str(), ec.message().c_str());
+        logger::error("Failed to create work_dir '{}': {}", work_dir, ec.message());
     }
     return (fs::path(config_abs_path).parent_path() / "cache.lastip").string();
 }

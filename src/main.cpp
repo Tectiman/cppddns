@@ -66,7 +66,7 @@ static UpdateResult update_single_record(const config::Config&       cfg,
         return result;
     }
 
-    logger::info("Processing record: %s (%s)", result.record_name.c_str(), rec.provider.c_str());
+    logger::info("Processing record: {} ({})", result.record_name, rec.provider);
 
     std::string proxy_url = config::get_record_proxy(cfg, rec);
     int         ttl       = config::get_record_ttl(rec);
@@ -74,7 +74,7 @@ static UpdateResult update_single_record(const config::Config&       cfg,
     if (rec.provider == "cloudflare") {
         if (!rec.cloudflare) {
             result.error = "missing cloudflare config";
-            logger::error("Record %s: %s", result.record_name.c_str(), result.error.c_str());
+            logger::error("Record {}: {}", result.record_name, result.error);
             return result;
         }
 
@@ -93,20 +93,20 @@ static UpdateResult update_single_record(const config::Config&       cfg,
             auto it = cached_zone_ids.find(rec.zone);
             if (it != cached_zone_ids.end() && !it->second.empty()) {
                 zone_id = it->second;
-                logger::debug("Zone ID loaded from cache for %s: %s", rec.zone.c_str(), zone_id.c_str());
+                logger::debug("Zone ID loaded from cache for {}: {}", rec.zone, zone_id);
             }
         }
 
         if (zone_id.empty()) {
-            logger::info("Zone ID not configured, fetching for zone: %s", rec.zone.c_str());
+            logger::info("Zone ID not configured, fetching for zone: {}", rec.zone);
             std::string err;
             zone_id = provider.get_zone_id(rec.zone, "", err);
             if (zone_id.empty()) {
                 result.error = "Failed to get Zone ID: " + err;
-                logger::error("Record %s: %s", result.record_name.c_str(), result.error.c_str());
+                logger::error("Record {}: {}", result.record_name, result.error);
                 return result;
             }
-            logger::info("Zone ID fetched: %s", zone_id.c_str());
+            logger::info("Zone ID fetched: {}", zone_id);
 
             // Save to cache
             if (!config::update_zone_id_cache(zone_id_cache_file, rec.zone, zone_id)) {
@@ -119,14 +119,14 @@ static UpdateResult update_single_record(const config::Config&       cfg,
 
         if (!ok) {
             result.error = "Cloudflare upsert failed";
-            logger::error("Failed to update %s", result.record_name.c_str());
+            logger::error("Failed to update {}", result.record_name);
             return result;
         }
 
     } else if (rec.provider == "aliyun") {
         if (!rec.aliyun) {
             result.error = "missing aliyun config";
-            logger::error("Record %s: %s", result.record_name.c_str(), result.error.c_str());
+            logger::error("Record {}: {}", result.record_name, result.error);
             return result;
         }
 
@@ -143,17 +143,17 @@ static UpdateResult update_single_record(const config::Config&       cfg,
         bool ok = provider.upsert_record(rec.zone, rec.record, current_ip, ttl, extra);
         if (!ok) {
             result.error = "Aliyun upsert failed";
-            logger::error("Failed to update %s", result.record_name.c_str());
+            logger::error("Failed to update {}", result.record_name);
             return result;
         }
 
     } else {
         result.error = "unsupported provider: " + rec.provider;
-        logger::error("Record %s: %s", result.record_name.c_str(), result.error.c_str());
+        logger::error("Record {}: {}", result.record_name, result.error);
         return result;
     }
 
-    logger::success("Record %s updated successfully", result.record_name.c_str());
+    logger::success("Record {} updated successfully", result.record_name);
     result.success = true;
 
     return result;
@@ -188,7 +188,7 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
         return 1;
     }
 
-    logger::info("cppddns starting with %zu record(s)", cfg.records.size());
+    logger::info("cppddns starting with {} record(s)", cfg.records.size());
 
     // ── Get current IPv6 ──────────────────────────────────────────────────────
     std::vector<ip_getter::IPv6Info> infos;
@@ -197,8 +197,8 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
     if (!cfg.general.get_ip.interface_name.empty()) {
         infos = ip_getter::get_from_interface(cfg.general.get_ip.interface_name, ip_err);
         if (infos.empty()) {
-            logger::info("Interface %s failed: %s. Trying API fallback...",
-                      cfg.general.get_ip.interface_name.c_str(), ip_err.c_str());
+            logger::info("Interface {} failed: {}. Trying API fallback...",
+                      cfg.general.get_ip.interface_name, ip_err);
             infos = ip_getter::get_from_apis(cfg.general.get_ip.urls, ip_err);
         }
     } else {
@@ -206,17 +206,17 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
     }
 
     if (infos.empty()) {
-        logger::error("Failed to get current IP: %s", ip_err.c_str());
+        logger::error("Failed to get current IP: {}", ip_err);
         return 1;
     }
 
     std::string current_ip = ip_getter::select_best(infos, ip_err);
     if (current_ip.empty()) {
-        logger::error("Failed to select best IPv6: %s", ip_err.c_str());
+        logger::error("Failed to select best IPv6: {}", ip_err);
         return 1;
     }
 
-    logger::info("Current IPv6 address: %s", current_ip.c_str());
+    logger::info("Current IPv6 address: {}", current_ip);
 
     // ── Cache check ────────────────────────────────────────────────────────────
     std::string cache_file = config::get_cache_file_path(
@@ -225,9 +225,9 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
 
     if (!ignore_cache && !last_ip.empty()) {
         if (last_ip == current_ip) {
-            logger::info("IP has not changed since last run: %s", current_ip.c_str());
+            logger::info("IP has not changed since last run: {}", current_ip);
         } else {
-            logger::info("IP changed from %s to %s", last_ip.c_str(), current_ip.c_str());
+            logger::info("IP changed from {} to {}", last_ip, current_ip);
         }
     }
 
@@ -250,7 +250,7 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
         if (elapsed >= timeout_sec) {
-            logger::warning("Timeout reached (%d seconds), forcing shutdown", timeout_sec);
+            logger::warning("Timeout reached ({} seconds), forcing shutdown", timeout_sec);
             g_shutdown.store(true);
             break;
         }
@@ -265,7 +265,7 @@ static int run_cmd(const std::string& config_path, bool ignore_cache, int timeou
         if (r.success) ++success_count; else ++fail_count;
     }
 
-    logger::info("Update completed: %d succeeded, %d failed", success_count, fail_count);
+    logger::info("Update completed: {} succeeded, {} failed", success_count, fail_count);
 
     // Update cache only if IP changed and at least one succeeded
     bool any_success = (success_count > 0);

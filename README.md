@@ -1,9 +1,10 @@
-# cppddns — 动态 DNS 客户端 (C++17)
+# cppddns — 动态 DNS 客户端 (C++23)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20FreeBSD%20%7C%20OpenBSD-blue)](README.md)
+[![Standard](https://img.shields.io/badge/C%2B%2B-23-blue)](README.md)
 
-[cppddns](./cppddns) 是 [goddns](../goddns) 的 C++17 重写版本，功能完全对等，配置文件格式兼容。
+[cppddns](./cppddns) 是 [goddns](../goddns) 的 C++23 重写版本，功能完全对等，配置文件格式兼容。
 
 ## 特性
 
@@ -74,8 +75,14 @@ cmake --build build -j$(nproc)
 
 ### 编译器支持
 
-✅ **g++** (GCC 7+ with C++17 support)
-✅ **clang++** (Clang 5+ with C++17 support)
+✅ **g++** (GCC 13+ with C++23 support)
+✅ **clang++** (Clang 16+ with C++23 support)
+
+> C++23 新特性：
+> - `std::format` - 类型安全的格式化输出
+> - `std::to_underlying` - enum 到 underlying type 的转换
+> - `std::string_view` - 无拷贝字符串引用
+> - 模板参数推导改进
 
 ## 运行
 
