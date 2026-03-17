@@ -1,6 +1,7 @@
 # cppddns — 动态 DNS 客户端 (C++17)
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20FreeBSD%20%7C%20OpenBSD-blue)](README.md)
 
 [cppddns](./cppddns) 是 [goddns](../goddns) 的 C++17 重写版本，功能完全对等，配置文件格式兼容。
 
@@ -9,16 +10,29 @@
 - **多域名支持**：单次运行可并发更新多个 DNS 记录
 - **Cloudflare 集成**：AAAA 记录自动创建/更新，Zone ID 自动获取
 - **阿里云 DNS**：HMAC-SHA1 签名，AAAA 记录自动创建/更新
-- **IPv6 支持**：Linux netlink 接口获取 + HTTP API 降级
+- **IPv6 支持**：
+  - Linux：netlink 接口
+  - FreeBSD/OpenBSD：ioctl 接口
+  - 所有平台：HTTP API 降级
 - **代理支持**：HTTP/HTTPS/SOCKS5（仅 Cloudflare）
 - **IP 缓存**：避免重复 API 调用
 - **彩色日志**：终端下分级彩色显示，支持文件输出
 
 ## 系统依赖
 
+### Linux (Ubuntu / Debian)
 ```bash
-# Ubuntu / Debian
 sudo apt install cmake build-essential libcurl4-openssl-dev libssl-dev
+```
+
+### FreeBSD
+```bash
+pkg install cmake gcc curl openssl
+```
+
+### OpenBSD
+```bash
+pkg_add cmake curl openssl
 ```
 
 > `nlohmann/json` 和 `argparse` 由 CMake FetchContent 自动拉取，无需手动安装。
@@ -189,11 +203,23 @@ cppddns/
     ├── config.hpp / config.cpp
     ├── cache.hpp / cache.cpp
     ├── ip_getter.hpp / ip_getter.cpp
+    ├── ip_getter_freebsd.cpp  # FreeBSD/OpenBSD ioctl 实现
     └── provider/
         ├── provider.hpp
         ├── cloudflare.hpp / cloudflare.cpp
         └── aliyun.hpp / aliyun.cpp
 ```
+
+## 平台支持
+
+| 平台 | IPv6 获取方式 | 状态 |
+|------|--------------|------|
+| Linux | netlink (`RTM_GETADDR`) | ✅ 完整支持 |
+| FreeBSD | ioctl (`SIOCGIFALIFETIME_IN6`) | ✅ 支持 |
+| OpenBSD | ioctl (`getifaddrs`) | ✅ 支持 |
+| macOS | - | ⚠️ 暂无支持 |
+
+所有平台均支持 HTTP API 降级方式获取 IPv6 地址。
 
 ## 许可证
 

@@ -1,11 +1,14 @@
 #include "ip_getter.hpp"
 #include "log.hpp"
 
-// Linux netlink headers
-#include <arpa/inet.h>
+// Linux netlink headers (only on Linux)
+#if defined(__linux__)
 #include <asm/types.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#endif
+
+#include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -75,13 +78,15 @@ static void populate_info(IPv6Info* info) {
         info->address_state = "Preferred/Static";
     }
 
-    info->is_candidate = (info->scope == "Global Unicast" && 
-                          !info->is_deprecated && 
-                          !info->is_unique_local && 
+    info->is_candidate = (info->scope == "Global Unicast" &&
+                          !info->is_deprecated &&
+                          !info->is_unique_local &&
                           info->valid_lft > 0);
 }
 
-// ─── Netlink IPv6 getter ──────────────────────────────────────────────────────
+// ─── Netlink IPv6 getter (Linux only) ────────────────────────────────────────
+
+#if defined(__linux__)
 
 std::vector<IPv6Info> get_from_interface(const std::string& iface_name,
                                           std::string&       error_out) {
@@ -175,6 +180,8 @@ done:
     if (result.empty()) error_out = "No suitable IPv6 address on interface " + iface_name;
     return result;
 }
+
+#endif // __linux__
 
 // ─── HTTP API getter ──────────────────────────────────────────────────────────
 

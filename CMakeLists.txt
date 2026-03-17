@@ -53,6 +53,11 @@ set(SOURCES
     src/provider/aliyun.cpp
 )
 
+# Platform-specific sources
+if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    list(APPEND SOURCES src/ip_getter_freebsd.cpp)
+endif()
+
 add_executable(cppddns ${SOURCES})
 
 target_include_directories(cppddns PRIVATE
