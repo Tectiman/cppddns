@@ -39,14 +39,43 @@ pkg_add cmake curl openssl
 
 ## 构建
 
+### 使用 g++ 编译（默认）
+
 ```bash
 # 直接构建（dev 版本）
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# 带版本信息构建
-./build.sh v1.0.0
+# 或指定使用 g++
+CXX=g++ cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
 ```
+
+### 使用 clang++ 编译
+
+```bash
+CXX=clang++ cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+### 带版本信息构建
+
+```bash
+# 使用构建脚本
+./build.sh v1.0.0
+
+# 或手动设置编译参数
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  -DAPP_VERSION=v1.0.0 \
+  -DAPP_COMMIT=$(git rev-parse HEAD) \
+  -DAPP_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cmake --build build -j$(nproc)
+```
+
+### 编译器支持
+
+✅ **g++** (GCC 7+ with C++17 support)
+✅ **clang++** (Clang 5+ with C++17 support)
 
 ## 运行
 
