@@ -64,7 +64,7 @@ std::string AliyunProvider::hmac_sha1_base64(const std::string& key, const std::
 
 std::string AliyunProvider::url_encode(const std::string& s) {
     std::ostringstream out;
-    for (unsigned char c : s) {
+    for (char c : s) {
         if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
             out << c;
         } else {

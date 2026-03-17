@@ -2,9 +2,19 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace config {
+
+// C++23: constexpr constants for configuration defaults
+inline constexpr std::string_view DEFAULT_LOG_OUTPUT = "shell";
+inline constexpr std::string_view CACHE_FILENAME = "cache.lastip";
+inline constexpr std::string_view ZONEID_CACHE_FILENAME = "cache.zoneid.json";
+inline constexpr int DEFAULT_CLOUDFLARE_TTL = 180;
+inline constexpr int DEFAULT_ALIYUN_TTL = 600;
+inline constexpr int MAX_API_RETRIES = 2;
+inline constexpr int API_TIMEOUT_SECONDS = 15;
 
 struct IPSource {
     std::string              interface_name; ///< network interface (optional)

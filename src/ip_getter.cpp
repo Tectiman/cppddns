@@ -142,7 +142,7 @@ std::expected<std::vector<IPv6Info>, std::string> get_from_interface(std::string
 
             // Parse attributes
             const rtattr* rta = IFA_RTA(ifa);
-            int rta_len = IFA_PAYLOAD(nlh);
+            auto rta_len = IFA_PAYLOAD(nlh);
 
             const uint8_t* addr = nullptr;
             uint32_t preferred_lft = 0, valid_lft = 0;

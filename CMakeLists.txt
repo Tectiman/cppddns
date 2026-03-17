@@ -11,9 +11,15 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Compiler flags
-add_compile_options(-Wall -Wextra -Wpedantic)
+add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-O2)
+endif()
+
+# Enable warnings as errors for better code quality
+option(WARNINGS_AS_ERRORS "Treat warnings as errors" ON)
+if(WARNINGS_AS_ERRORS)
+    add_compile_options(-Werror)
 endif()
 
 # ─── Dependencies ──────────────────────────────────────────────────────────────

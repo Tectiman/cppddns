@@ -237,7 +237,7 @@ std::optional<Config> read_config(const std::string& path) {
     // general
     if (root.contains("general")) {
         const auto& g = root["general"];
-        cfg.general.log_output = jstr(g, "log_output", "shell");
+        cfg.general.log_output = jstr(g, "log_output", std::string(config::DEFAULT_LOG_OUTPUT));
         cfg.general.work_dir   = jstr(g, "work_dir");
         cfg.general.proxy      = expand_env(jstr(g, "proxy"));
 
@@ -359,11 +359,11 @@ std::string get_cache_file_path(const std::string& config_abs_path,
         std::error_code ec;
         fs::create_directories(work_dir, ec);
         if (!ec) {
-            return (fs::path(work_dir) / "cache.lastip").string();
+            return (fs::path(work_dir) / config::CACHE_FILENAME).string();
         }
         logger::error("Failed to create work_dir '{}': {}", work_dir, ec.message());
     }
-    return (fs::path(config_abs_path).parent_path() / "cache.lastip").string();
+    return (fs::path(config_abs_path).parent_path() / config::CACHE_FILENAME).string();
 }
 
 std::string read_last_ip(const std::string& path) {
@@ -396,14 +396,14 @@ std::string get_record_proxy(const Config& cfg, const RecordConfig& record) {
 
 int get_record_ttl(const RecordConfig& record) {
     if (record.ttl > 0) return record.ttl;
-    if (record.provider == "cloudflare") return 180;
-    return 600;
+    if (record.provider == "cloudflare") return config::DEFAULT_CLOUDFLARE_TTL;
+    return config::DEFAULT_ALIYUN_TTL;
 }
 
 // ─── ZoneID cache helpers ─────────────────────────────────────────────────────
 
 std::string get_zone_id_cache_path(const std::string& config_abs_path) {
-    return (fs::path(config_abs_path).parent_path() / "cache.zoneid.json").string();
+    return (fs::path(config_abs_path).parent_path() / config::ZONEID_CACHE_FILENAME).string();
 }
 
 std::map<std::string, std::string> read_zone_id_cache(const std::string& path) {
