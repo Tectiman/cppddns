@@ -1,5 +1,7 @@
 # cppddns — 动态 DNS 客户端 (C++17)
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 [cppddns](./cppddns) 是 [goddns](../goddns) 的 C++17 重写版本，功能完全对等，配置文件格式兼容。
 
 ## 特性
@@ -179,6 +181,7 @@ cppddns/
 ├── CMakeLists.txt
 ├── build.sh
 ├── config.example.json
+├── LICENSE
 ├── README.md
 └── src/
     ├── main.cpp
@@ -191,3 +194,7 @@ cppddns/
         ├── cloudflare.hpp / cloudflare.cpp
         └── aliyun.hpp / aliyun.cpp
 ```
+
+## 许可证
+
+采用 **MIT License** - 详见 [LICENSE](LICENSE) 文件。
